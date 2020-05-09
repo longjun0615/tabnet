@@ -126,6 +126,29 @@ class TabNetNoEmbeddings(torch.nn.Module):
         res = 0
 
         prior = torch.ones(x.shape).to(x.device)
+        M_loss = 0
+        att = self.initial_splitter(x)[:, self.n_d:]
+
+        for step in range(self.n_steps):
+            M = self.att_transformers[step](prior, att)
+            M_loss += torch.mean(torch.sum(torch.mul(M, torch.log(M+self.epsilon)),
+                                           dim=1)) / (self.n_steps)
+            # update prior
+            prior = torch.mul(self.gamma - M, prior)
+            # output
+            masked_x = torch.mul(M, x)
+            out = self.feat_transformers[step](masked_x)
+            d = ReLU()(out[:, :self.n_d])
+            res = torch.add(res, d)
+            # update attention
+            att = out[:, self.n_d:]
+
+        res = self.final_mapping(res)
+        return res, M_loss
+
+    def forward_masks(self, x):
+
+        prior = torch.ones(x.shape).to(x.device)
         M_explain = torch.zeros(x.shape).to(x.device)
         M_loss = 0
         att = self.initial_splitter(x)[:, self.n_d:]
@@ -142,15 +165,13 @@ class TabNetNoEmbeddings(torch.nn.Module):
             masked_x = torch.mul(M, x)
             out = self.feat_transformers[step](masked_x)
             d = ReLU()(out[:, :self.n_d])
-            res = torch.add(res, d)
             # explain
             step_importance = torch.sum(d, dim=1)
             M_explain += torch.mul(M, step_importance.unsqueeze(dim=1))
             # update attention
             att = out[:, self.n_d:]
 
-        res = self.final_mapping(res)
-        return res, M_loss, M_explain, masks
+        return M_explain, masks
 
 
 class TabNet(torch.nn.Module):
@@ -231,6 +252,11 @@ class TabNet(torch.nn.Module):
         x = self.embedder(x)
         x = self.initial_bn(x)
         return self.tabnet(x)
+
+    def forward_masks(self, x):
+        x = self.embedder(x)
+        x = self.initial_bn(x)
+        return self.tabnet.forward_masks(x)
 
 
 class AttentiveTransformer(torch.nn.Module):
